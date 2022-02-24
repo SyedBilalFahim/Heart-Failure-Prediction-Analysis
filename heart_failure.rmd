@@ -1,0 +1,575 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+```{r,exclude= T}
+library(dplyr)
+library(ggplot2 )
+library(corrplot)
+library(ppcor)
+library(mctest)
+library(car)
+library(plyr)
+library(pROC)
+library(Deducer)
+library(naivebayes)
+library(mice)
+library(caret)
+library(ranger)
+library(neuralnet)
+library(e1071)
+
+```
+# Project Intro:
+
+An introduction to the problem/claim:
+
+The main goal of this project is to predict heart failure among the patients with 13 different clinical features who undergo treatment.
+
+Data description:
+We will be working on a data with 13 attributes in which our target variable will be the Death Event. We will be predicting if the patient died during the treatment or not. Lets see the structure of our data.
+
+
+
+```{r}
+
+
+heart_train <- read.csv("C:/Users/syedm/OneDrive/Desktop/New Task/heart_train.csv", stringsAsFactors=TRUE)
+heart_test <- read.csv("C:/Users/syedm/OneDrive/Desktop/New Task/heart_test (1).csv", stringsAsFactors=TRUE)
+
+str(heart_train)
+```
+All the attributes are numeric. We will be predicting Death Event with the help of all our other attributes.
+
+Scientific Papers or links:
+1. TREATMENT OUTCOME OF HEART FAILURE PATIENTS ADMITTED IN KEMISSIE GENERAL
+   HOSPITAL, NORTHEAST ETHIOPIA: RETROSPECTIVE STUDY.
+   link: http://journalcra.com/sites/default/files/issue-pdf/36842.pdf
+   
+2. Survival analysis of heart failure patients: A case study By:
+   Tanvir Ahmad,Assia Munir,Sajjad Haider Bhatti ,Muhammad Aftab,Muhammad Ali Raza
+   link: https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0181001
+
+   Findings: 
+   1. 32% People died due to CHD
+   2. They worked on COX regression,According to Cox model, age was most significant variable.
+   
+3. Machine learning can predict survival of patients with heart failure from serum creatinine and ejection fraction alone
+   By: Davide Chicco & Giuseppe Jurman.
+   link: https://bmcmedinformdecismak.biomedcentral.com/articles/10.1186/s12911-020-1023-5
+   
+   Findings:
+   1. Random Forest performed exceptionally in predicting.
+   
+4. Bayesian Survival Analysis of Heart Failure Patients: A Case Study in Jimma University Medical Center, Jimma, Ethiopia
+   Tafese Ashine Tefera, Geremew Muleta, Kenenisa Tadesse.
+   
+   link: https://www.researchsquare.com/article/rs-339250/v1
+   
+5. Association between enrolment in a heart failure quality registry and subsequent
+   mortality—a nationwide cohort study.
+   
+   link: https://onlinelibrary.wiley.com/doi/pdf/10.1002/ejhf.762
+   
+   
+Interesting Facts Of the Data:
+Explanatory Data Analysis
+
+```{r}
+barplot(table(heart_train$Death_event))
+Linear_model<- lm(Death_event~. ,data=heart_train)
+
+summary(Linear_model)
+
+
+
+```
+The things we observed from the model are that there are only 3 attribute which have p-values lesser than 0.05 which means that these are the most significant attributes towards the Death Event.
+
+Interesting Fact would be that time is significant while the other clinical features like blood pressure smoking etc are not significant.
+
+Lets check Serum sodium values
+
+```{r}
+hist(heart_train$serum_sodium)
+
+```
+Here we can see that almost 60% people have values greater than 135 which means that these are unlikely to have any severe problems.
+
+This is one of the feature which can cause huge problems to ones health which means that it would be significant. Same for the ejection fraction.
+
+
+
+#Missing values
+If the average of missing values in columns is greater than 1% impute values using mice() otherwise remove missing values. Report the steps of analysis, report changes to the dataset and make clear statement with argumentation of your decision (impute/delete)
+
+Checking For Train Dataset
+
+```{r}
+
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(heart_train,2,pMiss)
+apply(heart_train,1,pMiss)
+print("Since none of the coloumns have missing values less than 1% except Death Event(which doesn't has any),
+      therefore we'll use mice() to impute values instead of deleting")
+
+md.pattern(heart_train)
+
+```
+
+
+14 samples miss high blood pressure, 13 samples miss creatinine phosphokinase,
+11 samples miss sex, 10 samples miss smoking, 9 samples miss time and diabetes, 
+7 samples miss serum creatinine, 6 samples miss age, 18 samples miss serum sodium and ejection fraction,
+16 samples miss anaemia and 14 samples miss platelets information. 
+
+Only 56 samples are complete.
+
+Mice package enables us to deal with the missing values in the dataset, assiting us to add replacement values in place of NA's to maintain consistency in the data. 
+
+We will take 5 total number of multiple imputations (which is the default value)
+for the start we will take a total of 5 number of iterations
+The imputation method used is predictive mean matching
+
+```{r}
+
+Data <- mice(heart_train,m=5,maxit=5,meth='pmm',seed=500)
+summary(Data)
+densityplot(Data)
+
+
+```
+Here, we can see the predicted and actual values, Actual ones are in blue while the predicted ones are in magenta"
+since there are 5 imputed datasets, you can select any of them.
+
+```{r}
+Data_train <-complete(Data,5)
+head(heart_train)
+head(Data_train)
+stripplot(Data, pch = 20, cex = 1.2)
+
+```
+It is now visible that the missing values are now imputed, creating a new dataset free of missing values.
+We will repeat the same process for our testing dataset.
+
+Checking Missing Values for test set
+
+```{r}
+apply(heart_test,2,pMiss)
+print("Since none of the coloumns have missing values less than 1%, therefore we'll use mice() to impute values")
+md.pattern(heart_test)
+Datatest <- mice(heart_test,m=5,maxit=5,meth='pmm',seed=500)
+densityplot(Datatest)
+stripplot(Datatest, pch = 20, cex = 1.2,theme = mice.theme())
+Data_test<-complete(Datatest,5)
+
+
+```
+Here, we have got 5 different data imputation . By observing the stripplot we conclude that dataset 5 has
+done more accurate imputation than all others
+# Checking for Outliers
+
+```{r}
+
+outliers<- sapply(Data_train, function(x)(boxplot.stats(x)$out))
+outliers
+
+#to check the outliers in each column, we will be using the results of a boxplot
+boxplot(Data_train)$out
+boxplot(Data_train,
+        xlab = "Clinical Features",
+        main = "Boxplot to indicate outliers",
+        plot = T
+)
+
+
+```
+Outliers exist in creatinine_phosphokinase, ejection_fraction, platelets, serum_creatinine, 
+serum_sodium, Death_event.
+
+As we can see that if we omit outliers, we then also needed to change the target variable which will effect our analysis
+in future, so to cater this problem we are going to impute these outliers in such a way that it corressponds to the values which are closer than the center.
+
+Now lets check if test data has outliers or not.
+
+
+```{r}
+
+outliers_test<- sapply(Data_test, function(x)(boxplot.stats(x)$out))
+outliers_test
+
+#to check the outliers in each column, we will be using the results of a boxplot
+boxplot(Data_test)$out
+boxplot(Data_test,
+        xlab = "Clinical Features",
+        main = "Boxplot to indicate outliers",
+        plot = T
+)
+
+
+```
+Outliers exist in creatinine_phosphokinase, ejection_fraction, platelets, and serum_creatinine.
+
+
+# Checking Multicolinearity Between Predictors
+
+For checking multicolinearity we will see the correlation between predictors and if predictors are correlated that means
+that we have multicolinearity.
+
+We have excluded the death event column here.
+```{r}
+pcor(Data_train[1:12], method = "pearson")
+```
+Multicollinearity is a viable problem since it occurs when independent variables in a model are correlated because independent variables should exist independently and in case we do not deal with this problem  it may cause problems when we are fitting a model.
+
+```{r}
+corrplot.mixed(cor(Data_train[1:12]), number.cex = .7)
+corrplot::corrplot(corr = cor(Data_train[1:12]))
+```
+We can see that age and serum_creatinine are correlated positively, smoking and sex are positively correlated,
+serum_creatinine and serum_sodium are negatively correlated, anaemia and phosphokinase are negatively correlated
+
+We can assess multicollinearity by computing the variance inflation factor (VIF)
+If VIF is 1, there is no multicollinearity, If >5 and <10, this indicates a probelm.
+
+We will start by taking Death Event as our target (independent variable)
+```{r}
+model<-lm(Death_event~.,data = (Data_train))
+model$coefficients
+vif(model)
+```
+The VIF values for each clinical feature is almost closer to 1.In this case, we can say that the predictors are moderately correlated. 
+
+The correlation exits but it is not a problem. 
+In case the VIF value for a certain variable x was too high, we can easily resolve the problem by removing
+it from our model:
+model<-lm(Death_event~. -x,data = (Data_train))
+
+
+# Scaling 
+Scaling is a crucial feature when it comes to data pre-processing phase. It may help us reach goals such as convergence in popular machine learning algorithms.In our dataset, we have features measured in years, mcg/L, kiloplatetes/mL, mg/dL, mEq/L, and days features with ghier magnitudes such as of platelets may be given higher weightage. To prevent our results being biased towards such feature, we need to perform scaling so that all the features contribute equally to the results. (standardization only) using the scale function
+```{r}
+new_train <- as.data.frame(scale(Data_train, center = TRUE, scale = TRUE))
+new_test<-as.data.frame(scale(Data_test[1:12], center = TRUE, scale = TRUE))
+Death_event_test<- Data_test$Death_event
+Death_event<- Data_train$Death_event
+new_train<- data.frame(Data_train[1:12],Death_event)
+new_test<- data.frame(Data_test[1:12],Death_event_test)
+```
+
+# Models
+
+ 
+4.1: Develop five predictive models: logistic regression, Naïve Bayes, Random Forest, SVM (Support Vector Machine),]
+Neural Network on training dataset. While training models, optimise their parameters and sample data to minimise 
+Type2 Error (there should not be a model with accuracy < 90%). 
+Report models performance in a form of table, AUC values and ROC curves, total cost. 
+
+1. Logistics Regression:
+```{r}
+new_train$Death_event=factor(new_train$Death_event)
+reg_model<- glm(Death_event~.,data = new_train,family = binomial)
+summary(reg_model)
+```
+Smaller the pvalue, more significant the estimate is.
+According to this, age, ejection fraction, serum creatinine and time are the most significant predictors 
+Since all of them are <0.05.
+
+Testing Model
+```{r}
+probabilities <- reg_model %>% predict(new_train, type = "response")
+predicted.classes <- ifelse(probabilities > 0.5, 1, 0)
+predicted.classes
+# Model accuracy
+acctrain <- (mean(predicted.classes == new_train$Death_event)*100)
+```
+To minimize the error we will only pick the significant predictors
+
+Cross Validation used: repeated k-fold
+```{r}
+train_control <- trainControl(method="repeatedcv", number=170, repeats=5)
+train_model <- train(Death_event~ age + time + ejection_fraction + serum_sodium, 
+                     new_train, trControl=train_control, method="glm")
+print(train_model)
+(train_model$results)
+# Model accuracy
+acctrain <- (train_model$results$Accuracy)
+
+```
+Roc Curve and AUC for LR
+```{r}
+rocplot(train_model$finalModel)
+roc_log<- roc(Death_event~ as.numeric(predict(train_model$finalModel)))
+AucLR<-auc(roc_log)
+```
+
+2. Random Forest
+```{r}
+rf<-ranger(Death_event~.,data = new_train)
+# Calculating model accuracy
+pred.randomforest<-predict(rf,data=new_train);
+
+confusionMatrix(rf$predictions,factor(new_train$Death_event))
+```
+Here we can see our model has accuracy 89.05 which is less than 90 so now we will tune our parameters using random search
+which will find the optimal parameter using accuracies
+
+Random Search With Cross Validation Method CV.
+```{r}
+# Random Search
+control <- trainControl(method="repeatedcv", number=170,repeats = 2, search="random")
+set.seed(12345)
+new_train$Death_event=factor(new_train$Death_event)
+rf_random <- train(Death_event~age+serum_sodium+ejection_fraction+time, data=new_train, method="rf", metric= "Accuracy", tuneLength=15, trControl=control)
+plot(rf_random)
+```
+We can see that at mtry=3 the model has optimal accuracy. Therefore, it will be the optimal model
+
+Roc Curve and AUC for RF
+```{r}
+Roc_rf<-roc(Death_event~ as.numeric(rf_random$finalModel$predicted),data= new_train)
+AucRF<- auc(Roc_rf)
+plot(Roc_rf)
+```
+
+3.NAIVE BAYES 
+
+Fitting Naive Bayes Model to training dataset
+```{r}
+set.seed(120)  # Setting Seed
+model_naive <- naive_bayes(Death_event~ . , data = new_train, usekernel = T)
+summary(model_naive)
+print(model_naive)
+
+# Predicting on trained data
+p <- predict(model_naive, new_train, type = 'prob')
+head(cbind(p, new_train))
+p1 <- predict(model_naive, new_train)
+tab <- table(p1, new_train$Death_event)
+print("Training model accuracy")
+M <- 100-((1 - sum(diag(tab)) / sum(tab))*100)
+print(M)
+```   
+
+Cross Validation used: repeated k-fold
+```{r}
+train_control2 <- trainControl(method="repeatedcv", number=170, repeats=12)
+# train the model
+train_model2 <- train(Death_event~age+serum_sodium+time+ejection_fraction, new_train, trControl=train_control2, 
+                      method="nb")
+print(train_model2)
+train_model2$results
+```
+Roc and AUC values for NB
+```{r}
+Roc_nb<- roc(Death_event~ as.numeric(predict(train_model2)),data=new_train)
+plot(Roc_nb)
+AucNB <- auc(Roc_nb)
+```
+   
+
+4.NEURAL NETWORK
+
+```{r}
+model_neuraln <- neuralnet(Death_event~., new_train, hidden=3,linear.output = FALSE)
+plot(model_neuraln)
+#training dataset
+pren <- predict(model_neuraln, new_train[,1:12])
+pren.classes <- ifelse(pren > 0.5, 1, 0)
+table(actual = new_train$Death_event, prediction =  pren.classes[, 1] > 0.5)
+accNNtrain <- ((153+41)/(155+46))*100
+accNNtrain
+```
+
+Cross Validation used: repeated k-fold
+```{r}
+train_control3 <- trainControl(method="repeatedcv", number=170, repeats=3)
+# train the mode7
+train_model3 <- train(Death_event~ .,new_train, trControl=train_control3, method="nnet")
+print(train_model3)
+train_model3$results
+```
+   
+Roc Curve and AUC for NN
+```{r}
+Roc_nn<- roc(Death_event~ as.numeric(predict(train_model3)),data=new_train)
+plot(Roc_nn)
+AucNN <- auc(Roc_nn)
+```
+5.SVM
+```{r}
+svmfit = svm(Death_event~ ., data = new_train, kernel = "linear", cost = 10, scale = FALSE)
+print(svmfit)
+summary(svmfit)
+confusionMatrix(predict(svmfit),new_train$Death_event)
+```
+We can see that the accuracy is very low. we will optimise our model by using K fold cross validation
+
+
+```{r}
+svm_Linear <- train(Death_event~age+time+ejection_fraction+serum_sodium, data = new_train, method = "svmLinear",
+                    trControl=trainControl(method="cv", number=20),
+                    preProcess = c("center", "scale"),
+                    tuneGrid= expand.grid(C=c(0,0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2,5,10)),
+                    
+                    tuneLength = 10)
+svm_Linear
+plot(svm_Linear)
+```
+
+At cost value 5 the model accuracy is greater than 90 therefore it's our optimal model
+
+Accuracy:
+```{r}
+accSVMtrain<- mean(predict(svm_Linear)==new_train$Death_event)*100   
+```
+
+ROC Curve And AUC Value:
+```{r}
+Roc_svm <- roc(Death_event~as.numeric(predict(svm_Linear)),data=new_train)
+AucSVM <- auc(Roc_svm)
+plot(Roc_svm)
+```
+
+# Testing Models With Test Dataset:
+4.2 Test performance of each model on test dataset. Report performance indicator in a form of table/graphs. Comment on the results
+
+1. Logistics Regression:
+
+Testing predictions with optimal model.
+```{r}
+
+probabilitiestest <- train_model$finalModel %>% predict(new_test, type = "response")
+predicted.classestest <- ifelse(probabilitiestest > 0.5, 1, 0)
+acctest <- (mean(predicted.classestest == new_test$Death_event_test)*100)
+
+# Confusion Matrix
+
+cm<-table(predicted.classestest,as.factor(new_test$Death_event_test))
+confusionMatrix(factor(predicted.classestest),factor(new_test$Death_event_test))
+
+```
+
+False positives are in greater quantity which can cause prediction error. Accuracy is about 78% which is due to low specificity. This means that model hasn't done great in predicting the patients which did not died during treatment.
+
+2. Random forest:
+Testing predictions with optimal model.
+```{r}
+
+pre<-predict(rf_random,new_test)
+confusionMatrix(pre,factor(new_test$Death_event_test))
+```
+False positives are in greater quantity which can cause prediction error. Accuracy is about 80% which is due to low specificity. This means that model hasn't done great in predicting the patients who did not died during treatment.
+
+3. Neural Network:
+```{r}
+pren <- predict(model_neuraln, new_test[,1:12])
+pren.classes <- ifelse(pren > 0.5, 1, 0)
+table(actual = new_test$Death_event_test, prediction =  pren.classes[, 1] > 0.5)
+accNNtest <- ((12+41)/(50+16))*100
+accNNtest
+```
+
+The Accuracy is 80% which seems better.
+
+4. Naive Bayes:
+
+Predicting on testing data with actual model:
+```{r}
+p2 <- predict(model_naive, new_test, type = 'prob')
+head(cbind(p2, new_test))
+p3 <- predict(model_naive, new_test)
+tab1 <- table(p3, new_test$Death_event_test)
+print("Testing model accuracy")
+M2 <- 100-((1 - sum(diag(tab1)) / sum(tab1))*100)
+print(M2)
+```
+Now predicting with hyper parameter model:
+```{r}
+p<-predict(train_model2,new_test)
+confusionMatrix(p,factor(new_test$Death_event_test))
+```
+The model worked better but low specificity detected which means that model hasn't done well in predicting alive patients during treatment
+
+5. SVM:
+Testing with optimal model:
+```{r}
+p_svm<- predict(svm_Linear,new_test)
+confusionMatrix(p_svm,factor(new_test$Death_event_test))
+```
+
+The model worked better but low specificity detected which means that model hasn't done well in predicting alive patients during treatment
+
+
+# Interpretting Models:
+
+Steps taken to achieve the final result could be that our dataset was initally divided into two datasets:training and testing. We began by removing null values to prevent discrepancy in our data. We further detected the outliers in our dataset and sampled it (iski reasoning Iwrote in the code)
+
+We trained the training dataset on five different models and tested the testing data on this model to pick the most accurate one.
+
+Cross Validation used for training method: Repeated K-fold
+
+Tuning parameter used: 
+1. glm (logistic regression)
+2. nnet (neural network)
+3. rf (random forest), 
+4. svmLinear(svm with Linear kernel)
+5. nb (naive bayes) were respectively used as method depending
+on the type of model used - classification or regression.
+
+trainControl metric was used to define how the function works, it enabled us to input the number of sampling
+iterations of our choice to reach better accuracy. Repeats were also set to determine the number of
+set folds to be computed. For repeated training and testing splits, repeatedcv method was also enabled.
+Repeat K-Fold Cross Validation helped improve the performance of the training model, as the term itself 
+says "repeated"; the cross-validation process is hence repeated several times as specified i.e.
+train/test split is repeated too, returning a mean result of the folds.
+
+Problems In Data:
+1. Missing Values.
+2. Outliers.
+3. Presence of variation in the variables which can not be weighed equally since their magnitudes are different. 
+
+Model Performances:
+
+Model Performances with the train data were upto the expected mark, but with test data almost all performed poorly in predicting the alive patients during the treatment which led to the increase in false positive values. Hence, it gives less accuracy than the actual one.
+
+Accuracy And AUC Tables:
+```{r}
+AucSVM <- auc(Roc_svm)
+AucNN <- auc(Roc_nn)
+AucNB <- auc(Roc_nb)
+AucRF<- auc(Roc_rf)
+AucLR<-auc(roc_log)
+
+
+accSVMtrain<- mean(predict(svm_Linear)==new_train$Death_event)*100
+accSVMtest<- mean(p_svm==new_test$Death_event_test)*100
+accNNtest <- ((12+41)/(50+16))*100
+accNNtrain <- ((153+41)/(155+46))*100
+M2 <- 100-((1 - sum(diag(tab1)) / sum(tab1))*100)
+M <- 100-((1 - sum(diag(tab)) / sum(tab))*100)
+
+accRftrain <- mean(predict_rf_train == new_train$Death_event)*100
+accRftest <- mean(predict_rf == new_test$Death_event_test)*100
+acctest <- (mean(predicted.classestest == new_test$Death_event_test)*100)
+acctrain <- (train_model$results$Accuracy)
+
+
+Accuracy_table <- data.frame(model = c("LR", "NB", "NN","SVM","RF"), test_accuracy = c(acctest, M2, accNNtest, accSVMtest, accRftest), 
+                    train_accuracy = c(acctrain*100, M, accNNtrain, accSVMtrain, accRftrain))
+Accuracy_table
+Auc_table <- data.frame(model = c("LR", "NB", "NN","SVM","RF"), 
+                        area_of_curve = c(AucLR, AucNB, AucNN, AucSVM, AucRF))
+
+Auc_table
+```
+AUC values lies in between 0 till 1, where closer to 0 means inaccurate while closer to 1 means accurate.
+
+1.The AUC for Logistics model is outstanding which shows that model did a great work in predicting.
+2. The AUC for Naive Bayes is also good which shows that the model did good.
+3. The AUC for NeuralNetwork was average which shows that model performed averagely.
+4. The AUC for Random Forest is also good.
+5. The AUC of SVM is also good which shows most of the models performed good.
+
+3. 
